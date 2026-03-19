@@ -22,6 +22,9 @@ from src.enums import ReportType
 from src.core.pipeline import StockAnalysisPipeline
 from src.core.market_review import run_market_review
 
+import time  # 【新增】引入时间模块用于休眠处理
+import logging
+
 logger = logging.getLogger(__name__)
 
 # ==========================================
@@ -128,23 +131,34 @@ def analyze_stocks(
     notifier: Optional[NotificationService] = None
 ) -> List[AnalysisResult]:
     """
-    分析多只股票
+    分析多只股票（已加入 API 速率限制防护机制）
     """
     if config is None:
         config = get_config()
     
-    # ==========================================
-    # 【新增】在批量分析前，仅检查一次大盘状态，节省网络开销
-    # ==========================================
+    # 【维持护盾】在批量分析前，检查一次大盘状态
     is_circuit_broken = check_global_circuit_breaker()
     
     results = []
-    for stock_code in stock_codes:
+    total_stocks = len(stock_codes)
+    
+    for index, stock_code in enumerate(stock_codes):
+        logger.info(f"🤖 正在调用 AI 分析 ({index+1}/{total_stocks}): {stock_code} ...")
+        
         # 将熔断状态传递给单只股票分析函数
         result = analyze_stock(stock_code, config, full_report, notifier, is_circuit_broken)
         if result:
             results.append(result)
-    
+            
+        # ==========================================
+        # 【新增】API 物理限速器 (Rate Limiter)
+        # ==========================================
+        # 如果不是列表中的最后一只股票，则强制挂起进程，避免把模型接口打满
+        if index < total_stocks - 1:
+            sleep_seconds = 5  # 可根据你的 API 额度调整，建议 3-8 秒
+            logger.info(f"⏳ 为防止触发 LLM 速率限制 (RateLimit)，系统强制休眠 {sleep_seconds} 秒...")
+            time.sleep(sleep_seconds)
+            
     return results
 
 def perform_market_review(
